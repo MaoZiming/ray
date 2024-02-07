@@ -86,6 +86,7 @@ class StreamingOutputBackpressurePolicy(BackpressurePolicy):
         downstream_idle = False
 
         for op, state in reversed(topology.items()):
+            print(op.name, state.outqueue_num_blocks(), state.outqueue_memory_usage())
             max_blocks_to_read_per_op[state] = (
                 self._max_num_blocks_in_op_output_queue - state.outqueue_num_blocks()
             )

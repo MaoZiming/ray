@@ -397,7 +397,7 @@ class TestStreamOutputBackpressurePolicy(unittest.TestCase):
         )
 
 
-@pytest.mark.skip("Re-enable after enabling StreamingOutputBackpressurePolicy.")
+# @pytest.mark.skip("Re-enable after enabling StreamingOutputBackpressurePolicy.")
 def test_large_e2e_backpressure(shutdown_only, restore_data_context):  # noqa: F811
     """Test backpressure on a synthetic large-scale workload."""
     # The cluster has 10 CPUs and 200MB object store memory.
@@ -431,7 +431,7 @@ def test_large_e2e_backpressure(shutdown_only, restore_data_context):  # noqa: F
     ) * BLOCK_SIZE
     print(f"max_pending_block_bytes: {max_pending_block_bytes/1024/1024}MB")
 
-    ray.init(num_cpus=NUM_CPUS, object_store_memory=200 * 1024 * 1024)
+    info = ray.init(num_cpus=NUM_CPUS, object_store_memory=200 * 1024 * 1024)
 
     def produce(batch):
         print("Produce task started", batch["id"])
@@ -495,6 +495,11 @@ def test_large_e2e_backpressure(shutdown_only, restore_data_context):  # noqa: F
             last_snapshot,
         )
 
+    from ray._private.internal_api import memory_summary
+    meminfo = memory_summary(info.address_info["address"], stats_only=True)
+
+    print(meminfo, flush=True)
+    assert False
 
 if __name__ == "__main__":
     import sys
