@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 # Use `DataContext.set_config` to config it.
 # TODO(hchen): Enable StreamingOutputBackpressurePolicy by default.
 # Disable StreamingOutputBackpressurePolicy for now.
-ENABLED_BACKPRESSURE_POLICIES = []
+ENABLED_BACKPRESSURE_POLICIES = [ConcurrencyCapBackpressurePolicy]
 ENABLED_BACKPRESSURE_POLICIES_CONFIG_KEY = "backpressure_policies.enabled"
 
 
