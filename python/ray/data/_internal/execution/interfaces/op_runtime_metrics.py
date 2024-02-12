@@ -224,6 +224,14 @@ class OpRuntimeMetrics:
         """Size in bytes of output blocks that are not taken by the downstream yet."""
         return self.bytes_task_outputs_generated - self.bytes_outputs_taken
 
+    @property
+    def input_rate(self) -> float:
+        raise NotImplementedError
+
+    @property
+    def output_rate(self) -> float:
+        raise NotImplementedError
+
     def on_input_received(self, input: RefBundle):
         """Callback when the operator receives a new input."""
         self.num_inputs_received += 1

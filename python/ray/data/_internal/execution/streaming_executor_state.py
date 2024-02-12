@@ -520,7 +520,8 @@ def select_operator_to_run(
     to the user, it is no longer tracked.
     """
     # Filter to ops that are eligible for execution.
-    ops = []
+    ops: List[PhysicalOperator] = []
+    op_to_state: Dict[str, OpState] = {}
     for op, state in topology.items():
         under_resource_limits = _execution_allowed(op, resource_manager)
         if (
@@ -533,6 +534,7 @@ def select_operator_to_run(
             ops.append(op)
         # Update the op in all cases to enable internal autoscaling, etc.
         op.notify_resource_usage(state.num_queued(), under_resource_limits)
+        op_to_state[op.name] = state
 
     # If no ops are allowed to execute due to resource constraints, try to trigger
     # cluster scale-up.
@@ -562,6 +564,37 @@ def select_operator_to_run(
     # Nothing to run.
     if not ops:
         return None
+
+    new_ops: List[PhysicalOperator] = []
+    for op in ops:
+        op_input_dependencies = op.input_dependencies
+        # Maintain ratio with the successor.
+        predecessor_output_rate = [
+            op.metrics.output_rate
+            * (op_to_state[op.name].num_completed_tasks + op.num_active_tasks())
+            for op in op_input_dependencies
+        ]
+
+        op_output_dependencies = op.output_dependencies
+        successor_input_rate = [
+            op.metrics.input_rate
+            * (op_to_state[op.name].num_completed_tasks + op.num_active_tasks())
+            for op in op_output_dependencies
+        ]
+
+        if (op_to_state[op.name].num_completed_tasks + 1) * op_to_state[
+            op.name
+        ].input_rate > predecessor_output_rate:
+            continue
+
+        if (op_to_state[op.name].num_completed_tasks + 1) * op_to_state[
+            op.name
+        ].output_rate > successor_input_rate:
+            continue
+
+        new_ops.append(op)
+
+    ops = new_ops
 
     # Run metadata-only operators first. After that, equally penalize outqueue length
     # and num bundles processing for backpressure.
