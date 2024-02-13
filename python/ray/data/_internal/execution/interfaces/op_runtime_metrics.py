@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -44,6 +45,8 @@ class OpRuntimeMetrics:
     bytes_task_inputs_processed: int = field(default=0, metadata={"map_only": True})
     # Size in bytes of input blocks passed to submitted tasks.
     bytes_inputs_of_submitted_tasks: int = field(default=0, metadata={"map_only": True})
+    # Size in bytes of input blocks passed to finished tasks.
+    bytes_inputs_of_finished_tasks: int = field(default=0, metadata={"map_only": True})
 
     # === Outputs-related metrics ===
 
@@ -105,6 +108,9 @@ class OpRuntimeMetrics:
         default=0, metadata={"map_only": True, "export_metric": True}
     )
 
+    # Cumulative task durations
+    cumulative_task_durations: float = 0.0
+
     def __init__(self, op: "PhysicalOperator"):
         from ray.data._internal.execution.operators.map_operator import MapOperator
 
@@ -112,6 +118,8 @@ class OpRuntimeMetrics:
         self._is_map = isinstance(op, MapOperator)
         self._running_tasks: Dict[int, RunningTaskInfo] = {}
         self._extra_metrics: Dict[str, Any] = {}
+        self._task_id_to_start_time: Dict[int, float] = {}
+        self._task_id_to_input_size: Dict[int, int] = {}
 
     @property
     def extra_metrics(self) -> Dict[str, Any]:
@@ -224,6 +232,36 @@ class OpRuntimeMetrics:
         """Size in bytes of output blocks that are not taken by the downstream yet."""
         return self.bytes_task_outputs_generated - self.bytes_outputs_taken
 
+    @property
+    def input_rate(self) -> float:
+        if self.num_tasks_finished == 0:
+            return 0.0
+        print(
+            "input_rate: ",
+            "self.bytes_inputs_of_finished_tasks: ",
+            self.bytes_inputs_of_finished_tasks,
+            "self.cumulative_task_durations: ",
+            self.cumulative_task_durations,
+            "self.num_tasks_finished: ",
+            self.num_tasks_finished,
+        )
+        return self.bytes_inputs_of_finished_tasks / self.cumulative_task_durations
+
+    @property
+    def output_rate(self) -> float:
+        if self.num_tasks_finished == 0:
+            return 0.0
+        print(
+            "output_rate: ",
+            "self.bytes_outputs_of_finished_tasks: ",
+            self.bytes_outputs_of_finished_tasks,
+            "self.cumulative_task_durations: ",
+            self.cumulative_task_durations,
+            "self.num_tasks_finished: ",
+            self.num_tasks_finished,
+        )
+        return self.bytes_outputs_of_finished_tasks / self.cumulative_task_durations
+
     def on_input_received(self, input: RefBundle):
         """Callback when the operator receives a new input."""
         self.num_inputs_received += 1
@@ -247,6 +285,8 @@ class OpRuntimeMetrics:
         self.num_tasks_running += 1
         self.bytes_inputs_of_submitted_tasks += inputs.size_bytes()
         self._running_tasks[task_index] = RunningTaskInfo(inputs, 0, 0)
+        self._task_id_to_start_time[task_index] = time.perf_counter()
+        self._task_id_to_input_size[task_index] = inputs.size_bytes()
 
     def on_output_generated(self, task_index: int, output: RefBundle):
         """Callback when a new task generates an output."""
@@ -305,3 +345,10 @@ class OpRuntimeMetrics:
 
         inputs.destroy_if_owned()
         del self._running_tasks[task_index]
+
+        self.cumulative_task_durations += (
+            time.perf_counter() - self._task_id_to_start_time[task_index]
+        )
+        del self._task_id_to_start_time[task_index]
+        self.bytes_inputs_of_finished_tasks += self._task_id_to_input_size[task_index]
+        del self._task_id_to_input_size[task_index]
