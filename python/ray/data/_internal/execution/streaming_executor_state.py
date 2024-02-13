@@ -45,6 +45,7 @@ Topology = Dict[PhysicalOperator, "OpState"]
 
 # Min number of seconds between two autoscaling requests.
 MIN_GAP_BETWEEN_AUTOSCALING_REQUESTS = 20
+_RATE_EQUALIZING_ERROR_MARGIN = 1.5
 
 
 @dataclass
@@ -547,6 +548,59 @@ def select_operator_to_run(
             autoscaling_state.last_request_ts = now
             _try_to_scale_up_cluster(topology, execution_id)
 
+    new_ops: List[PhysicalOperator] = []
+    for op in ops:
+        print(
+            f"op name: {op.name}",
+            f"ops: {[o.name for o in ops]}" f"input rate: {op.metrics.input_rate}",
+            f"output rate: {op.metrics.output_rate}",
+        )
+        op_input_dependencies = op.input_dependencies
+        num_completed_and_active_tasks = (
+            op_to_state[op.name].num_completed_tasks + op.num_active_tasks()
+        )
+        # Maintain ratio with the successor.
+        predecessor_output_rate = [
+            op.metrics.output_rate * num_completed_and_active_tasks
+            for op in op_input_dependencies
+        ]
+
+        op_output_dependencies = op.output_dependencies
+        successor_input_rate = [
+            op.metrics.input_rate * (num_completed_and_active_tasks)
+            for op in op_output_dependencies
+        ]
+
+        if (
+            sum(predecessor_output_rate) > 0
+            and (num_completed_and_active_tasks + 1) * op.metrics.input_rate
+            > sum(predecessor_output_rate) * _RATE_EQUALIZING_ERROR_MARGIN
+        ):
+            print(
+                f"Skipped predecessor - op name: {op.name}",
+                f"input_dependencies: {op.input_dependencies}",
+                f"predecessor_output_rate: {predecessor_output_rate}",
+                f"{[op.metrics.output_rate for op in op_input_dependencies]}",
+            )
+            continue
+
+        if (
+            sum(successor_input_rate) > 0 and num_completed_and_active_tasks + 1
+        ) * op.metrics.output_rate > sum(
+            successor_input_rate
+        ) * _RATE_EQUALIZING_ERROR_MARGIN:
+            print(
+                f"Skipped successor - op name: {op.name}",
+                f"successor_input_rate: {sum(successor_input_rate)}",
+                f"output_rate: {op.metrics.output_rate}",
+                f"current number of tasks: {num_completed_and_active_tasks}",
+                f"{[op.metrics.input_rate for op in op_output_dependencies]}",
+            )
+            continue
+
+        new_ops.append(op)
+    ops = new_ops
+
     # To ensure liveness, allow at least 1 op to run regardless of limits. This is
     # gated on `ensure_at_least_one_running`, which is set if the consumer is blocked.
     if (
@@ -564,37 +618,6 @@ def select_operator_to_run(
     # Nothing to run.
     if not ops:
         return None
-
-    new_ops: List[PhysicalOperator] = []
-    for op in ops:
-        op_input_dependencies = op.input_dependencies
-        # Maintain ratio with the successor.
-        predecessor_output_rate = [
-            op.metrics.output_rate
-            * (op_to_state[op.name].num_completed_tasks + op.num_active_tasks())
-            for op in op_input_dependencies
-        ]
-
-        op_output_dependencies = op.output_dependencies
-        successor_input_rate = [
-            op.metrics.input_rate
-            * (op_to_state[op.name].num_completed_tasks + op.num_active_tasks())
-            for op in op_output_dependencies
-        ]
-
-        if (op_to_state[op.name].num_completed_tasks + 1) * op_to_state[
-            op.name
-        ].input_rate > predecessor_output_rate:
-            continue
-
-        if (op_to_state[op.name].num_completed_tasks + 1) * op_to_state[
-            op.name
-        ].output_rate > successor_input_rate:
-            continue
-
-        new_ops.append(op)
-
-    ops = new_ops
 
     # Run metadata-only operators first. After that, equally penalize outqueue length
     # and num bundles processing for backpressure.
